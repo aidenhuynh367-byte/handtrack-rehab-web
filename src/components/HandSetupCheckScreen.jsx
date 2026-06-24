@@ -18,6 +18,7 @@ import {
   summarizeCalibration,
   updateStabilityTracker,
 } from '../utils/trackingQuality.js'
+import { getPriorityStatusMessage } from '../utils/statusMessages.js'
 
 const MIN_CALIBRATION_SAMPLES = 8
 
@@ -229,6 +230,19 @@ function HandSetupCheckScreen({ selectedHand, onBack, onComplete }) {
     trackingStatus === 'Wrong orientation' ||
     trackingStatus === 'Outside guide box' ||
     trackingStatus === 'Unstable'
+  const cameraOverlayMessage = getPriorityStatusMessage({
+    status: trackingStatus,
+    selectedHand,
+    insideGuideBox: status.insideGuideBox,
+    trackingStable: status.trackingStable,
+    analysisInstruction:
+      trackingStatus === 'Wrong orientation'
+        ? 'Warning: face your palm toward the camera'
+        : '',
+    fallbackInstruction: isCalibrating
+      ? `Calibrating: ${secondsLeft}`
+      : 'Place your hand inside the box',
+  })
 
   return (
     <section className="screen setup-check-screen">
@@ -269,7 +283,7 @@ function HandSetupCheckScreen({ selectedHand, onBack, onComplete }) {
               </div>
             )}
             <div className="camera-overlay">
-              <span>{isCalibrating ? `Calibrating: ${secondsLeft}` : 'Place your hand inside the box'}</span>
+              <span>{cameraOverlayMessage}</span>
             </div>
           </div>
         </div>

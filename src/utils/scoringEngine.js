@@ -1,9 +1,11 @@
+import { calculateSessionPerformanceIndex } from './sessionMetric.js'
+
 const SCORE_WEIGHTS = {
-  formAccuracy: 0.25,
-  rangeAchievement: 0.25,
-  temporalControl: 0.15,
-  forceDexterity: 0.2,
-  compensationSymptom: 0.15,
+  targetPose: 0.2,
+  rangeOfMotion: 0.3,
+  fingerIsolation: 0.15,
+  movementSmoothness: 0.2,
+  repConsistency: 0.15,
 }
 
 const TARGET_RANGE_RATIOS = {
@@ -24,8 +26,6 @@ export function calculateSessionScores({
   targetSets,
   completedReps,
   completedSets,
-  painBefore,
-  painAfter,
 }) {
   const metrics = normalizeMetrics(sessionMetrics)
   const targetRepsTotal = Math.max(1, targetReps * targetSets)
@@ -41,31 +41,29 @@ export function calculateSessionScores({
   )
   const wrongOrientationRate = metrics.wrongOrientationFrames / Math.max(1, metrics.totalFrames)
   const outsideBoxRate = metrics.outsideGuideBoxFrames / Math.max(1, metrics.totalFrames)
-  const wrongHandRepeated = metrics.wrongHandFrames >= 5
-  let formAccuracy =
+  let targetPose =
     100 * (0.45 * validRepRate + 0.35 * sequenceAccuracy + 0.2 * trackingGoodRate)
 
   if (wrongOrientationRate > 0.15) {
-    formAccuracy -= 10
+    targetPose -= 10
     flags.push('Wrong orientation occurred often.')
   }
 
   if (outsideBoxRate > 0.15) {
-    formAccuracy -= 10
+    targetPose -= 10
     flags.push('Hand moved outside the guide box often.')
   }
 
-  if (wrongHandRepeated) {
-    formAccuracy -= 10
+  if (metrics.wrongHandFrames >= 5) {
+    targetPose -= 10
     flags.push('Wrong selected hand was detected repeatedly.')
   }
 
-  formAccuracy = clampScore(formAccuracy)
+  targetPose = clampScore(targetPose)
 
-  const rangeAchievement = rangeScoresByRep.length
+  const rangeOfMotion = rangeScoresByRep.length
     ? clampScore(average(rangeScoresByRep))
     : clampScore(100 * (completedReps / targetRepsTotal))
-
   const holdAccuracy = averageOrFallback(
     metrics.holdDurationsMs.map((holdDuration) =>
       clamp01(holdDuration / (metrics.targetHoldMs || TARGET_HOLD_MS)),
@@ -73,11 +71,14 @@ export function calculateSessionScores({
     completedReps > 0 ? 1 : 0,
   )
   const completionRate = clamp01(completedReps / targetRepsTotal)
-  const repConsistency = clamp01(1 - coefficientOfVariation(metrics.repDurationsMs))
+  const repConsistencyComponent = clamp01(1 - coefficientOfVariation(metrics.repDurationsMs))
   const fatigueScore = getFatigueScore(rangeScoresByRep)
   const temporalControl = clampScore(
     100 *
-      (0.3 * holdAccuracy + 0.3 * completionRate + 0.25 * repConsistency + 0.15 * fatigueScore),
+      (0.3 * holdAccuracy +
+        0.3 * completionRate +
+        0.25 * repConsistencyComponent +
+        0.15 * fatigueScore),
   )
 
   const contactSuccessRate = clamp01(metrics.targetContactSuccesses / attemptedReps)
@@ -85,109 +86,112 @@ export function calculateSessionScores({
   const releaseQuality = clamp01(
     metrics.releaseSuccesses / Math.max(1, metrics.targetContactSuccesses),
   )
-  const smoothnessScore = getSmoothnessScore(metrics.jitterScoresByRep)
+  const smoothnessComponent = getSmoothnessScore(metrics.jitterScoresByRep)
   const dexterityFallback = clamp01(completedReps / targetRepsTotal)
-  const forceDexterity = clampScore(
+  const fingerIsolation = clampScore(
     100 *
       (0.35 * (Number.isFinite(contactSuccessRate) ? contactSuccessRate : dexterityFallback) +
         0.25 * timeToTargetScore +
         0.2 * releaseQuality +
-        0.2 * smoothnessScore),
+        0.2 * smoothnessComponent),
   )
+  const movementSmoothness = clampScore(100 * smoothnessComponent)
+  const repConsistency = clampScore(100 * repConsistencyComponent)
 
   const badTrackingRate = metrics.badTrackingFrames / Math.max(1, metrics.totalFrames)
   const unstableRate = metrics.unstableFrames / Math.max(1, metrics.totalFrames)
-  const movementSafetyScore = clampScore(
+  const trackingQuality = clampScore(
     100 * (1 - (0.4 * wrongOrientationRate + 0.3 * outsideBoxRate + 0.3 * badTrackingRate)),
   )
-  let painPenalty = 0
-
-  if (painBefore === null || painAfter === null) {
-    flags.push('Symptom score uses movement-only estimate because pain was not entered.')
-  } else {
-    const painRise = painAfter - painBefore
-
-    if (painAfter > 3) {
-      painPenalty += 10
-    }
-
-    if (painRise > 1) {
-      painPenalty += 15
-      flags.push('Pain increased during the session.')
-    }
-
-    if (painAfter >= 7) {
-      flags.push('High pain reported — stop and consult a clinician.')
-    }
-  }
 
   if (badTrackingRate > 0.2 || unstableRate > 0.15) {
     flags.push('Tracking quality was low for part of the session.')
   }
 
-  const compensationSymptom = clampScore(movementSafetyScore - painPenalty)
+  const sectionScores = {
+    targetPose,
+    rangeOfMotion,
+    fingerIsolation,
+    movementSmoothness,
+    repConsistency,
+  }
   const finalScore = clampScore(
-    SCORE_WEIGHTS.formAccuracy * formAccuracy +
-      SCORE_WEIGHTS.rangeAchievement * rangeAchievement +
-      SCORE_WEIGHTS.temporalControl * temporalControl +
-      SCORE_WEIGHTS.forceDexterity * forceDexterity +
-      SCORE_WEIGHTS.compensationSymptom * compensationSymptom,
+    Object.entries(SCORE_WEIGHTS).reduce(
+      (sum, [key, weight]) => sum + weight * sectionScores[key],
+      0,
+    ),
   )
+  const ospi = calculateSessionPerformanceIndex({
+    successfulReps: validReps,
+    targetReps: targetRepsTotal,
+    sessionMetrics: {
+      ...metrics,
+      rangeScore: rangeOfMotion,
+      timingScore: temporalControl,
+      consistencyScore: repConsistency,
+    },
+    sectionScores,
+    calibrationBaseline: getExerciseBaseline(exerciseId, calibrationData),
+  })
 
   return {
-    formAccuracy,
-    rangeAchievement,
+    ...sectionScores,
+    formAccuracy: targetPose,
+    rangeAchievement: rangeOfMotion,
     temporalControl,
-    forceDexterity,
-    compensationSymptom,
+    forceDexterity: fingerIsolation,
+    trackingQuality,
+    sectionScores,
     finalScore,
+    totalScore: finalScore,
+    ospi,
     interpretation: getInterpretation(finalScore),
     flags,
     parameterDetails: {
-      formAccuracy: {
-        label: 'Movement Form Accuracy',
-        explanation: 'How consistently the movement followed the expected sequence.',
+      targetPose: {
+        label: 'Target Pose',
+        explanation: 'How consistently the movement followed the expected pose sequence.',
         suggestion:
-          formAccuracy < 70
-            ? 'Focus on completing the correct movement sequence.'
+          targetPose < 70
+            ? 'Focus on completing the expected movement sequence.'
             : 'Keep using the same controlled movement pattern.',
       },
-      rangeAchievement: {
-        label: 'Range Achievement',
-        explanation: 'How close each valid rep came to the target range for this exercise.',
+      rangeOfMotion: {
+        label: 'Range of Motion',
+        explanation: 'How close each valid rep came to the target movement range.',
         suggestion:
-          rangeAchievement < 70
-            ? 'Move closer to the target position without forcing pain.'
+          rangeOfMotion < 70
+            ? 'Move closer to the target position while staying comfortable.'
             : 'Keep reaching the target position with control.',
       },
-      temporalControl: {
-        label: 'Temporal Control and Endurance',
-        explanation: 'How well reps matched the intended rhythm, hold, and completion goal.',
+      fingerIsolation: {
+        label: 'Finger Isolation',
+        explanation: 'A webcam-based estimate of clean target contact and controlled release.',
         suggestion:
-          temporalControl < 70
-            ? 'Try slower, steadier repetitions.'
-            : 'Keep the same steady rhythm across the set.',
-      },
-      forceDexterity: {
-        label: 'Dexterity Output Proxy',
-        explanation: 'A webcam-only proxy for clean target contact and controlled release.',
-        suggestion:
-          forceDexterity < 70
+          fingerIsolation < 70
             ? 'Focus on clean target contact and controlled release.'
             : 'Keep the contact and release smooth.',
       },
-      compensationSymptom: {
-        label: 'Compensation and Symptom Control',
-        explanation: 'How well the hand stayed in reliable tracking conditions and symptom limits.',
+      movementSmoothness: {
+        label: 'Movement Smoothness',
+        explanation: 'How steady the tracked hand movement was during completed repetitions.',
         suggestion:
-          compensationSymptom < 70
-            ? 'Keep the palm facing the camera and stay inside the guide box.'
-            : 'Keep the hand centered and stop if symptoms increase.',
+          movementSmoothness < 70
+            ? 'Try slower, steadier repetitions.'
+            : 'Keep the same smooth movement pattern.',
+      },
+      repConsistency: {
+        label: 'Rep Consistency',
+        explanation: 'How consistent the timing was from one completed repetition to the next.',
+        suggestion:
+          repConsistency < 70
+            ? 'Aim for a more even rhythm between repetitions.'
+            : 'Keep the same steady rhythm across the set.',
       },
     },
     debug: {
       completedSets,
-      movementSafetyScore,
+      trackingQuality,
       rangeScoresByRep,
       trackingGoodRate,
       validRepRate,
@@ -206,8 +210,8 @@ function normalizeMetrics(metrics = {}) {
     outsideGuideBoxFrames: metrics.outsideGuideBoxFrames ?? 0,
     unstableFrames: metrics.unstableFrames ?? 0,
     attemptedReps: metrics.attemptedReps ?? 0,
-    validReps: metrics.validReps ?? 0,
-    invalidReps: metrics.invalidReps ?? 0,
+    validReps: metrics.validReps ?? metrics.successfulReps ?? 0,
+    invalidReps: metrics.invalidReps ?? metrics.failedReps ?? 0,
     correctStateTransitions: metrics.correctStateTransitions ?? 0,
     totalStateTransitions: metrics.totalStateTransitions ?? 0,
     repDurationsMs: metrics.repDurationsMs ?? [],
@@ -219,6 +223,14 @@ function normalizeMetrics(metrics = {}) {
     rangeScoresByRep: metrics.rangeScoresByRep ?? [],
     jitterScoresByRep: metrics.jitterScoresByRep ?? [],
     targetHoldMs: metrics.targetHoldMs ?? TARGET_HOLD_MS,
+    medianHoldMs: metrics.medianHoldMs,
+    medianRepCycleMs: metrics.medianRepCycleMs,
+    repCycleCv: metrics.repCycleCv,
+    trackingQualityMean: metrics.trackingQualityMean,
+    trackingWarningRate: metrics.trackingWarningRate,
+    fingertipPalmP10: metrics.fingertipPalmP10,
+    fingertipPalmP50: metrics.fingertipPalmP50,
+    fingertipPalmP90: metrics.fingertipPalmP90,
   }
 }
 
@@ -235,26 +247,23 @@ function getRangeScoresByRep(exerciseId, calibrationData = {}, metrics) {
   }
 
   return metrics.minTargetDistances
-    .filter((distance) => Number.isFinite(distance))
-    .map((minDistance) => {
-      const rangeRatio = 1 - minDistance / baseline
-      return clamp01(rangeRatio / targetRatio) * 100
-    })
+    .filter(Number.isFinite)
+    .map((minDistance) => clamp01((1 - minDistance / baseline) / targetRatio) * 100)
 }
 
 function getExerciseBaseline(exerciseId, calibrationData = {}) {
   if (exerciseId === 'ring-thumb') {
-    return calibrationData.openThumbRingDistance
+    return calibrationData?.openThumbRingDistance
   }
 
   if (exerciseId === 'ring-palm') {
-    return calibrationData.openRingPalmDistance ?? calibrationData.openRingToPalmDistance
+    return calibrationData?.openRingPalmDistance ?? calibrationData?.openRingToPalmDistance
   }
 
   if (exerciseId === 'closed-fist') {
     return (
-      calibrationData.openAvgFingertipPalmDistance ??
-      calibrationData.openAverageFingerToPalmDistance
+      calibrationData?.openAvgFingertipPalmDistance ??
+      calibrationData?.openAverageFingerToPalmDistance
     )
   }
 
@@ -266,19 +275,15 @@ function getTimeToTargetScore(timeToTargetMs) {
     return 1
   }
 
-  const averageTimeToTarget = average(timeToTargetMs)
-  const normalizedError = Math.abs(averageTimeToTarget - TARGET_TIME_TO_TARGET_MS) /
-    TARGET_TIME_TO_TARGET_MS
-
+  const normalizedError =
+    Math.abs(average(timeToTargetMs) - TARGET_TIME_TO_TARGET_MS) / TARGET_TIME_TO_TARGET_MS
   return clamp01(1 - normalizedError)
 }
 
 function getSmoothnessScore(jitterScoresByRep) {
-  if (!jitterScoresByRep.length) {
-    return 1
-  }
-
-  return clamp01(1 - average(jitterScoresByRep) / JITTER_REFERENCE)
+  return jitterScoresByRep.length
+    ? clamp01(1 - average(jitterScoresByRep) / JITTER_REFERENCE)
+    : 1
 }
 
 function getFatigueScore(rangeScoresByRep) {
@@ -289,7 +294,6 @@ function getFatigueScore(rangeScoresByRep) {
   const midpoint = Math.ceil(rangeScoresByRep.length / 2)
   const firstHalfAvg = average(rangeScoresByRep.slice(0, midpoint)) / 100
   const secondHalfAvg = average(rangeScoresByRep.slice(midpoint)) / 100
-
   return clamp01(1 - Math.max(0, firstHalfAvg - secondHalfAvg))
 }
 
@@ -303,7 +307,6 @@ function coefficientOfVariation(values) {
   const mean = average(validValues)
   const variance =
     validValues.reduce((sum, value) => sum + (value - mean) ** 2, 0) / validValues.length
-
   return Math.sqrt(variance) / mean
 }
 
@@ -314,12 +317,9 @@ function averageOrFallback(values, fallback) {
 
 function average(values) {
   const validValues = values.filter(Number.isFinite)
-
-  if (!validValues.length) {
-    return 0
-  }
-
-  return validValues.reduce((sum, value) => sum + value, 0) / validValues.length
+  return validValues.length
+    ? validValues.reduce((sum, value) => sum + value, 0) / validValues.length
+    : 0
 }
 
 function clampScore(value) {
@@ -339,17 +339,8 @@ function clamp(value, min, max) {
 }
 
 function getInterpretation(score) {
-  if (score < 50) {
-    return 'Needs attention'
-  }
-
-  if (score < 70) {
-    return 'Developing'
-  }
-
-  if (score < 85) {
-    return 'Good'
-  }
-
+  if (score < 50) return 'Needs attention'
+  if (score < 70) return 'Developing'
+  if (score < 85) return 'Good'
   return 'Strong'
 }

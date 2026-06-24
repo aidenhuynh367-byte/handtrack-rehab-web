@@ -25,3 +25,14 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+.firebase
+dist
+
+.firebase
+dist
+
+
+.firebase
+dist
+node_modules

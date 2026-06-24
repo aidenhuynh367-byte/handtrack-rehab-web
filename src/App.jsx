@@ -1,7 +1,12 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useState } from 'react'
+import AuthScreen from './components/AuthScreen.jsx'
 import CameraTrackingScreen from './components/CameraTrackingScreen.jsx'
+import CurrentSessionResult from './components/CurrentSessionResult.jsx'
 import DemoScreen from './components/DemoScreen.jsx'
 import HandSetupCheckScreen from './components/HandSetupCheckScreen.jsx'
+import ProfileSetupScreen from './components/ProfileSetupScreen.jsx'
+import ReportsDashboard from './components/ReportsDashboard.jsx'
+import { saveSessionReport } from './firebase/sessionReports.js'
 import { calculateSessionScores } from './utils/scoringEngine.js'
 import { EXERCISES, getExerciseById } from './utils/exercises.js'
 import './App.css'
@@ -11,29 +16,86 @@ const DEFAULT_PLAN = {
   selectedHand: 'Right',
   targetReps: 8,
   targetSets: 2,
-  painBefore: null,
 }
 
 function App() {
   const [screen, setScreen] = useState('welcome')
   const [plan, setPlan] = useState(DEFAULT_PLAN)
-  const [summary, setSummary] = useState(null)
   const [calibration, setCalibration] = useState(null)
+  const [sessionAccess, setSessionAccess] = useState(null)
+  const [userProfile, setUserProfile] = useState(null)
+  const [profileMode, setProfileMode] = useState('initial')
+  const [profileReturnScreen, setProfileReturnScreen] = useState('exercise')
+  const [reportSaveError, setReportSaveError] = useState('')
+  const [currentSessionResult, setCurrentSessionResult] = useState(null)
   const exercise = getExerciseById(plan.exerciseId)
+  const isSignedIn = sessionAccess?.mode === 'google' && sessionAccess.user
 
-  const completeSession = (sessionSummary) => {
-    setSummary({
+  const completeSession = async (sessionSummary) => {
+    const completedSummary = {
       ...sessionSummary,
       completedAt: new Date().toISOString(),
       reportId: `session-${Date.now()}`,
+    }
+    const scoreReport = calculateSessionScores({
+      exerciseId: exercise.id,
+      calibrationData: calibration,
+      sessionMetrics: completedSummary.sessionMetrics,
+      targetReps: plan.targetReps,
+      targetSets: plan.targetSets,
+      completedReps: completedSummary.completedReps,
+      completedSets: completedSummary.completedSets,
     })
-    setScreen('summary')
+    const scores = scoreReport.sectionScores
+    const averageScore = Math.round(
+      Object.values(scores).reduce((sum, score) => sum + score, 0) /
+        Object.values(scores).length,
+    )
+    const displayReport = {
+      exerciseName: exercise.name,
+      exerciseId: exercise.id,
+      selectedHand: plan.selectedHand,
+      targetReps: plan.targetReps,
+      targetSets: plan.targetSets,
+      completedReps: completedSummary.completedReps,
+      completedSets: completedSummary.completedSets,
+      ...scores,
+      averageScore,
+    }
+
+    // the current result should not depend on Firestore reloading
+    setCurrentSessionResult(displayReport)
+
+    if (!isSignedIn) {
+      // guests only see the current result
+      setScreen('summary')
+      return
+    }
+
+    setReportSaveError('')
+    setScreen('saving-report')
+
+    try {
+      // only signed-in users get saved progress
+      await saveSessionReport(sessionAccess.user.uid, displayReport)
+    } catch {
+      setReportSaveError('This session could not be saved. Your older reports are still available.')
+    }
+
+    setScreen('reports')
   }
 
-  const restart = () => {
-    setSummary(null)
+  const startNewSession = () => {
     setCalibration(null)
-    setScreen('welcome')
+    setReportSaveError('')
+    setCurrentSessionResult(null)
+    setScreen('exercise')
+  }
+
+  const editProfile = (returnScreen = screen) => {
+    setProfileMode('edit')
+    setProfileReturnScreen(returnScreen)
+    setScreen('profile')
   }
 
   const completeSetupCheck = (setupCalibration) => {
@@ -57,12 +119,59 @@ function App() {
           <p className="app-brand">HandTrack Rehab</p>
         </div>
         <div className="header-meta">
+          {isSignedIn &&
+            !['welcome', 'auth', 'profile', 'reports', 'saving-report'].includes(screen) && (
+            <button
+              className="header-profile-button"
+              type="button"
+              onClick={() => editProfile()}
+            >
+              Edit Profile
+            </button>
+          )}
           <span className="status-pill">Prototype</span>
           <span className="maker-credit">Made by Aiden H</span>
         </div>
       </div>
 
-      {screen === 'welcome' && <WelcomeScreen onStart={() => setScreen('exercise')} />}
+      {screen === 'welcome' && <WelcomeScreen onStart={() => setScreen('auth')} />}
+
+      {/* login happens after the intro page so users know what the app is first */}
+      {screen === 'auth' && (
+        <AuthScreen
+          onBack={() => setScreen('welcome')}
+          onGoogleComplete={(user, profile) => {
+            setSessionAccess({ mode: 'google', user })
+            setUserProfile(profile)
+
+            if (profile.profileSetupSeen) {
+              setScreen('exercise')
+            } else {
+              setProfileMode('initial')
+              setProfileReturnScreen('exercise')
+              setScreen('profile')
+            }
+          }}
+          onGuestContinue={() => {
+            setSessionAccess({ mode: 'guest', user: null })
+            setUserProfile(null)
+            setScreen('exercise')
+          }}
+        />
+      )}
+
+      {screen === 'profile' && isSignedIn && (
+        <ProfileSetupScreen
+          user={sessionAccess.user}
+          profile={userProfile}
+          isEditing={profileMode === 'edit'}
+          onComplete={(profile) => {
+            setUserProfile(profile)
+            setScreen(profileReturnScreen)
+          }}
+          onCancel={() => setScreen(profileReturnScreen)}
+        />
+      )}
 
       {screen === 'exercise' && (
         <ExerciseChoiceScreen
@@ -71,7 +180,7 @@ function App() {
             setCalibration(null)
             setPlan((current) => ({ ...current, exerciseId }))
           }}
-          onBack={() => setScreen('welcome')}
+          onBack={() => setScreen('auth')}
           onNext={() => setScreen('hand')}
         />
       )}
@@ -92,9 +201,7 @@ function App() {
         <DoseScreen
           targetReps={plan.targetReps}
           targetSets={plan.targetSets}
-          painBefore={plan.painBefore}
           onChange={(dose) => setPlan((current) => ({ ...current, ...dose }))}
-          onPainBeforeChange={(painBefore) => setPlan((current) => ({ ...current, painBefore }))}
           onBack={() => setScreen('hand')}
           onNext={() => setScreen('setup-check')}
         />
@@ -132,15 +239,21 @@ function App() {
       )}
 
       {screen === 'summary' && (
-        <SummaryScreen
-          exercise={exercise}
-          selectedHand={plan.selectedHand}
-          targetReps={plan.targetReps}
-          targetSets={plan.targetSets}
-          painBefore={plan.painBefore}
-          calibration={calibration}
-          summary={summary}
-          onRestart={restart}
+        <GuestSessionResultScreen
+          currentSession={currentSessionResult}
+          onStartSession={startNewSession}
+        />
+      )}
+
+      {screen === 'saving-report' && <SavingReportScreen />}
+
+      {screen === 'reports' && isSignedIn && (
+        <ReportsDashboard
+          user={sessionAccess.user}
+          currentSession={currentSessionResult}
+          saveError={reportSaveError}
+          onEditProfile={() => editProfile('reports')}
+          onStartSession={startNewSession}
         />
       )}
     </main>
@@ -169,7 +282,7 @@ function WelcomeScreen({ onStart }) {
         </div>
       </div>
       <button className="primary-button wide-button" type="button" onClick={onStart}>
-        Start Setup
+        Start Session
       </button>
     </section>
   )
@@ -228,9 +341,7 @@ function HandChoiceScreen({ selectedHand, onSelect, onBack, onNext }) {
 function DoseScreen({
   targetReps,
   targetSets,
-  painBefore,
   onChange,
-  onPainBeforeChange,
   onBack,
   onNext,
 }) {
@@ -260,34 +371,8 @@ function DoseScreen({
           onChange={(value) => setNumber('targetSets', value)}
         />
       </div>
-      <PainInput
-        label="Pain before exercise"
-        value={painBefore}
-        onChange={onPainBeforeChange}
-        helper="Optional 0-10 self-report. Leave blank to skip."
-      />
       <NavigationButtons onBack={onBack} onNext={onNext} nextLabel="Show Demo" />
     </section>
-  )
-}
-
-function PainInput({ label, value, onChange, helper }) {
-  const inputValue = value ?? ''
-
-  return (
-    <label className="pain-input-card">
-      <span className="metric-label">{label}</span>
-      <input
-        type="number"
-        min="0"
-        max="10"
-        step="1"
-        value={inputValue}
-        placeholder="Optional"
-        onChange={(event) => onChange(parsePainValue(event.target.value))}
-      />
-      <small>{helper}</small>
-    </label>
   )
 }
 
@@ -324,219 +409,27 @@ function NavigationButtons({ onBack, onNext, nextLabel }) {
   )
 }
 
-function SummaryScreen({
-  exercise,
-  selectedHand,
-  targetReps,
-  targetSets,
-  painBefore,
-  calibration,
-  summary,
-  onRestart,
-}) {
-  const [painAfter, setPainAfter] = useState(null)
-  const completedReps = summary?.completedReps ?? targetReps * targetSets
-  const completedSets = summary?.completedSets ?? targetSets
-  const durationSeconds = Math.max(1, Math.round((summary?.durationMs ?? 0) / 1000))
-  const scoreReport = useMemo(
-    () =>
-      calculateSessionScores({
-        exerciseId: exercise.id,
-        calibrationData: calibration,
-        sessionMetrics: summary?.sessionMetrics,
-        targetReps,
-        targetSets,
-        completedReps,
-        completedSets,
-        painBefore,
-        painAfter,
-      }),
-    [
-      calibration,
-      completedReps,
-      completedSets,
-      exercise.id,
-      painAfter,
-      painBefore,
-      summary?.sessionMetrics,
-      targetReps,
-      targetSets,
-    ],
-  )
-  const storedReport = useMemo(
-    () => ({
-      id: summary?.reportId,
-      dateTime: summary?.completedAt,
-      exerciseName: exercise.name,
-      selectedHand,
-      targetReps,
-      targetSets,
-      completedReps,
-      completedSets,
-      scores: {
-        formAccuracy: scoreReport.formAccuracy,
-        rangeAchievement: scoreReport.rangeAchievement,
-        temporalControl: scoreReport.temporalControl,
-        forceDexterity: scoreReport.forceDexterity,
-        compensationSymptom: scoreReport.compensationSymptom,
-      },
-      finalScore: scoreReport.finalScore,
-      painBefore,
-      painAfter,
-      flags: scoreReport.flags,
-      calibrationSnapshot: calibration,
-    }),
-    [
-      calibration,
-      completedReps,
-      completedSets,
-      exercise.name,
-      painAfter,
-      painBefore,
-      scoreReport,
-      selectedHand,
-      summary?.completedAt,
-      summary?.reportId,
-      targetReps,
-      targetSets,
-    ],
-  )
-
-  useEffect(() => {
-    saveScoreReport(storedReport)
-  }, [storedReport])
-
+function GuestSessionResultScreen({ currentSession, onStartSession }) {
   return (
-    <section className="screen summary-screen">
-      <div>
-        <p className="section-kicker">Session complete</p>
-        <h2>{exercise.name}</h2>
-      </div>
-      <div className="summary-grid">
-        <SummaryMetric label="Exercise" value={exercise.name} />
-        <SummaryMetric label="Hand" value={selectedHand} />
-        <SummaryMetric label="Reps" value={`${completedReps} / ${targetReps * targetSets}`} />
-        <SummaryMetric label="Sets" value={`${completedSets} / ${targetSets}`} />
-        <SummaryMetric label="Time" value={`${durationSeconds}s`} />
-      </div>
-      <PainInput
-        label="Pain after exercise"
-        value={painAfter}
-        onChange={setPainAfter}
-        helper="Optional 0-10 self-report. Leave blank to use movement-only symptom estimate."
-      />
-      <ScoreReport report={scoreReport} />
-      <button className="primary-button wide-button" type="button" onClick={onRestart}>
-        Start Again
+    <section className="screen guest-result-screen">
+      {/* guests only see the current result */}
+      <CurrentSessionResult report={currentSession} />
+      <button className="primary-button wide-button" type="button" onClick={onStartSession}>
+        Start New Session
       </button>
     </section>
   )
 }
 
-function ScoreReport({ report }) {
-  const parameters = [
-    ['formAccuracy', report.formAccuracy],
-    ['rangeAchievement', report.rangeAchievement],
-    ['temporalControl', report.temporalControl],
-    ['forceDexterity', report.forceDexterity],
-    ['compensationSymptom', report.compensationSymptom],
-  ]
-
+function SavingReportScreen() {
   return (
-    <section className="score-report" aria-label="Session Score Report">
-      <div className="score-report-heading">
-        <div>
-          <p className="section-kicker">Session Score Report</p>
-          <h3>Prototype movement score</h3>
-          <p>This prototype score is not medically validated.</p>
-        </div>
-        <div className="final-score">
-          <span>Final Score</span>
-          <strong>{report.finalScore} / 100</strong>
-          <small>{report.interpretation}</small>
-        </div>
+    <section className="screen saving-report-screen" aria-live="polite">
+      <div className="auth-card">
+        <p className="section-kicker">Saving progress</p>
+        <h2>Saving your session report…</h2>
+        <p>Your five score results are being added to your account.</p>
       </div>
-
-      <div className="score-card-grid">
-        {parameters.map(([key, score]) => {
-          const detail = report.parameterDetails[key]
-
-          return (
-            <article className="score-card" key={key}>
-              <div>
-                <span className="metric-label">{detail.label}</span>
-                <strong>{score} / 100</strong>
-              </div>
-              <p>{detail.explanation}</p>
-              <small>{detail.suggestion}</small>
-            </article>
-          )
-        })}
-      </div>
-
-      {report.flags.length > 0 && (
-        <div className="score-flags">
-          <span className="metric-label">Flags</span>
-          <ul>
-            {report.flags.map((flag) => (
-              <li key={flag}>{flag}</li>
-            ))}
-          </ul>
-        </div>
-      )}
     </section>
-  )
-}
-
-function parsePainValue(value) {
-  if (value === '') {
-    return null
-  }
-
-  const parsedValue = Number(value)
-
-  if (!Number.isFinite(parsedValue)) {
-    return null
-  }
-
-  return Math.min(10, Math.max(0, parsedValue))
-}
-
-function saveScoreReport(report) {
-  if (!report.id || typeof window === 'undefined') {
-    return
-  }
-
-  window.localStorage.setItem('handtrackRehabLastScoreReport', JSON.stringify(report))
-
-  const history = readScoreHistory()
-  const existingIndex = history.findIndex((item) => item.id === report.id)
-  const nextHistory =
-    existingIndex >= 0
-      ? history.map((item, index) => (index === existingIndex ? report : item))
-      : [...history, report]
-
-  window.localStorage.setItem(
-    'handtrackRehabScoreReports',
-    JSON.stringify(nextHistory.slice(-20)),
-  )
-}
-
-function readScoreHistory() {
-  try {
-    const parsedHistory = JSON.parse(window.localStorage.getItem('handtrackRehabScoreReports'))
-    return Array.isArray(parsedHistory) ? parsedHistory : []
-  } catch {
-    return []
-  }
-}
-
-function SummaryMetric({ label, value }) {
-  return (
-    <div className="summary-metric">
-      <span className="metric-label">{label}</span>
-      <strong>{value}</strong>
-    </div>
   )
 }
 

@@ -13,12 +13,12 @@ export const GUIDE_BOX = {
 
 const SMOOTHING_PREVIOUS_WEIGHT = 0.7
 const SMOOTHING_CURRENT_WEIGHT = 0.3
-const FINGER_TIPS = [
-  LANDMARKS.indexTip,
-  LANDMARKS.middleTip,
-  LANDMARKS.ringTip,
-  LANDMARKS.pinkyTip,
-]
+const FINGER_TIPS = {
+  index: LANDMARKS.indexTip,
+  middle: LANDMARKS.middleTip,
+  ring: LANDMARKS.ringTip,
+  pinky: LANDMARKS.pinkyTip,
+}
 
 export function smoothLandmarks(currentLandmarks, previousLandmarks) {
   if (!previousLandmarks || previousLandmarks.length !== currentLandmarks?.length) {
@@ -111,10 +111,16 @@ export function getOpenHandMetrics(landmarks) {
   const thumbRingDistance =
     distance(landmarks[LANDMARKS.thumbTip], landmarks[LANDMARKS.ringTip]) / palmScale
   const ringToPalmDistance = distance(landmarks[LANDMARKS.ringTip], palmCenter) / palmScale
+  // saves each finger so one bent finger does not control the whole release
+  const fingerToPalmDistances = Object.fromEntries(
+    Object.entries(FINGER_TIPS).map(([finger, index]) => [
+      finger,
+      distance(landmarks[index], palmCenter) / palmScale,
+    ]),
+  )
   const averageFingerToPalmDistance =
-    FINGER_TIPS.reduce((sum, index) => sum + distance(landmarks[index], palmCenter), 0) /
-    FINGER_TIPS.length /
-    palmScale
+    Object.values(fingerToPalmDistances).reduce((sum, value) => sum + value, 0) /
+    Object.keys(FINGER_TIPS).length
 
   return {
     palmScale,
@@ -122,6 +128,7 @@ export function getOpenHandMetrics(landmarks) {
     openThumbRingDistance: thumbRingDistance,
     openRingToPalmDistance: ringToPalmDistance,
     openAverageFingerToPalmDistance: averageFingerToPalmDistance,
+    openFingerToPalmDistances: fingerToPalmDistances,
   }
 }
 
@@ -161,6 +168,12 @@ export function summarizeCalibration(accumulator) {
     openAverageFingerToPalmDistance: average(
       samples.map((sample) => sample.openAverageFingerToPalmDistance),
     ),
+    openFingerToPalmDistances: {
+      index: average(samples.map((sample) => sample.openFingerToPalmDistances.index)),
+      middle: average(samples.map((sample) => sample.openFingerToPalmDistances.middle)),
+      ring: average(samples.map((sample) => sample.openFingerToPalmDistances.ring)),
+      pinky: average(samples.map((sample) => sample.openFingerToPalmDistances.pinky)),
+    },
     palmOrientationBaseline: samples[samples.length - 1]?.orientationLabel ?? 'Palm',
     landmarkJitterScore: average(stabilityScores),
     sampleCount: samples.length,

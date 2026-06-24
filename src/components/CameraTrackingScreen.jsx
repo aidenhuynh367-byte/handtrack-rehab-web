@@ -14,6 +14,7 @@ import {
   smoothLandmarks,
   updateStabilityTracker,
 } from '../utils/trackingQuality.js'
+import { getPriorityStatusMessage } from '../utils/statusMessages.js'
 
 const INITIAL_HUD = {
   phase: 'Ready',
@@ -22,6 +23,8 @@ const INITIAL_HUD = {
   measurement: null,
   orientationLabel: 'Unknown',
   orientationFeatures: null,
+  trackingStable: false,
+  insideGuideBox: false,
 }
 
 function CameraTrackingScreen({
@@ -86,6 +89,8 @@ function CameraTrackingScreen({
           measurement: null,
           orientationLabel: 'Unknown',
           orientationFeatures: null,
+          trackingStable: false,
+          insideGuideBox: false,
         },
         true,
       )
@@ -128,6 +133,8 @@ function CameraTrackingScreen({
             measurement: null,
             orientationLabel: 'Unknown',
             orientationFeatures: null,
+            trackingStable: false,
+            insideGuideBox: false,
           },
           true,
         )
@@ -142,6 +149,8 @@ function CameraTrackingScreen({
             measurement: null,
             orientationLabel: 'Unknown',
             orientationFeatures: null,
+            trackingStable: false,
+            insideGuideBox: false,
           },
           true,
         )
@@ -169,6 +178,9 @@ function CameraTrackingScreen({
         orientationTracker: orientationTrackerRef.current,
         requirePalmOrientation: currentCounterState.isStartPhase,
       })
+      const handInsideGuideBox = Boolean(
+        analysis.landmarks && isHandInsideGuideBox(analysis.landmarks),
+      )
       drawHandLandmarks(canvas, result, analysis.selectedIndex)
 
       if (currentCounterState.setComplete) {
@@ -180,6 +192,8 @@ function CameraTrackingScreen({
           measurement: null,
           orientationLabel: 'Palm',
           orientationFeatures: null,
+          trackingStable: true,
+          insideGuideBox: handInsideGuideBox,
         })
         animationRef.current = window.requestAnimationFrame(processFrame)
         return
@@ -201,12 +215,14 @@ function CameraTrackingScreen({
           measurement: pausedCounterState.measurement,
           orientationLabel: analysis.orientationLabel ?? 'Unknown',
           orientationFeatures: analysis.orientationFeatures,
+          trackingStable: false,
+          insideGuideBox: handInsideGuideBox,
         })
         animationRef.current = window.requestAnimationFrame(processFrame)
         return
       }
 
-      if (!isHandInsideGuideBox(analysis.landmarks)) {
+      if (!handInsideGuideBox) {
         recordFrameStatus(sessionMetricsRef.current, 'Outside guide box')
         resetStabilityTracker(stabilityTrackerRef.current)
         previousRawLandmarksRef.current = null
@@ -222,6 +238,8 @@ function CameraTrackingScreen({
           measurement: pausedCounterState.measurement,
           orientationLabel: analysis.orientationLabel ?? 'Palm',
           orientationFeatures: analysis.orientationFeatures,
+          trackingStable: false,
+          insideGuideBox: false,
         })
         animationRef.current = window.requestAnimationFrame(processFrame)
         return
@@ -253,6 +271,8 @@ function CameraTrackingScreen({
           measurement: pausedCounterState.measurement,
           orientationLabel: analysis.orientationLabel ?? 'Palm',
           orientationFeatures: analysis.orientationFeatures,
+          trackingStable: false,
+          insideGuideBox: true,
         })
         animationRef.current = window.requestAnimationFrame(processFrame)
         return
@@ -270,13 +290,15 @@ function CameraTrackingScreen({
       setCounterState(nextCounterState)
 
       if (nextCounterState.complete) {
+        const durationMs = Date.now() - startedAtRef.current
         onComplete({
           completedReps: nextCounterState.repsCompleted,
           completedSets: nextCounterState.setsCompleted,
-          durationMs: Date.now() - startedAtRef.current,
+          durationMs,
           sessionMetrics: mergeSessionMetrics(
             sessionMetricsRef.current,
             nextCounterState.sessionMetrics,
+            durationMs,
           ),
         })
         return
@@ -289,6 +311,8 @@ function CameraTrackingScreen({
         measurement: nextCounterState.measurement,
         orientationLabel: analysis.orientationLabel ?? 'Palm',
         orientationFeatures: analysis.orientationFeatures,
+        trackingStable: true,
+        insideGuideBox: true,
       })
       animationRef.current = window.requestAnimationFrame(processFrame)
     }
@@ -319,6 +343,8 @@ function CameraTrackingScreen({
         measurement: null,
         orientationLabel: 'Unknown',
         orientationFeatures: null,
+        trackingStable: false,
+        insideGuideBox: false,
       },
       true,
     )
@@ -329,6 +355,15 @@ function CameraTrackingScreen({
     : counterState.setsCompleted + 1
   const progress = Math.min(100, Math.round((counterState.repsInSet / targetReps) * 100))
   const hasOrientationWarning = hud.trackingStatus === 'Wrong orientation'
+  const cameraOverlayMessage = getPriorityStatusMessage({
+    status: hud.trackingStatus,
+    selectedHand,
+    insideGuideBox: hud.insideGuideBox,
+    trackingStable: hud.trackingStable,
+    analysisInstruction: hud.instruction,
+    counterInstruction: counterState.instruction,
+    fallbackInstruction: hud.trackingStatus,
+  })
 
   return (
     <section className="tracking-screen">
@@ -344,7 +379,7 @@ function CameraTrackingScreen({
               </div>
             )}
             <div className="camera-overlay">
-              <span>{hud.trackingStatus}</span>
+              <span>{cameraOverlayMessage}</span>
             </div>
           </div>
           {cameraError && <p className="error-message">{cameraError}</p>}
@@ -364,22 +399,26 @@ function CameraTrackingScreen({
             <HudMetric label="Sets" value={`${Math.min(activeSet, targetSets)} / ${targetSets}`} />
             <HudMetric label="Phase" value={hud.phase} />
             <HudMetric label="Tracking" value={hud.trackingStatus} />
-            <HudMetric label="Orientation" value={hud.orientationLabel} isSmall />
-            <HudMetric
-              label="palmWidthRatio"
-              value={formatDebugValue(hud.orientationFeatures?.palmWidthRatio)}
-              isSmall
-            />
-            <HudMetric
-              label="mcpXSpreadRatio"
-              value={formatDebugValue(hud.orientationFeatures?.mcpXSpreadRatio)}
-              isSmall
-            />
-            <HudMetric
-              label="tipXSpreadRatio"
-              value={formatDebugValue(hud.orientationFeatures?.tipXSpreadRatio)}
-              isSmall
-            />
+            {exercise.id !== 'closed-fist' && (
+              <>
+                <HudMetric label="Orientation" value={hud.orientationLabel} isSmall />
+                <HudMetric
+                  label="palmWidthRatio"
+                  value={formatDebugValue(hud.orientationFeatures?.palmWidthRatio)}
+                  isSmall
+                />
+                <HudMetric
+                  label="mcpXSpreadRatio"
+                  value={formatDebugValue(hud.orientationFeatures?.mcpXSpreadRatio)}
+                  isSmall
+                />
+                <HudMetric
+                  label="tipXSpreadRatio"
+                  value={formatDebugValue(hud.orientationFeatures?.tipXSpreadRatio)}
+                  isSmall
+                />
+              </>
+            )}
           </div>
 
           <div className="progress-block">
@@ -392,8 +431,28 @@ function CameraTrackingScreen({
             </div>
           </div>
 
-          {hud.measurement !== null && (
+          {exercise.id !== 'closed-fist' && hud.measurement !== null && (
             <p className="distance-readout">Normalized measure: {hud.measurement.toFixed(2)}</p>
+          )}
+
+          {exercise.id === 'closed-fist' && (
+            <div className="closed-fist-debug" aria-label="Closed fist debug values">
+              <span className="metric-label">Closed fist debug</span>
+              {/* only show the debug values useful for users */}
+              <div className="hud-grid closed-fist-debug-grid">
+                <HudMetric label="Phase" value={counterState.phase} isSmall />
+                <HudMetric
+                  label="Stable tracking"
+                  value={formatDebugBoolean(hud.trackingStable)}
+                  isSmall
+                />
+                <HudMetric
+                  label="Inside guide box"
+                  value={formatDebugBoolean(hud.insideGuideBox)}
+                  isSmall
+                />
+              </div>
+            </div>
           )}
 
           <div className="nav-buttons hud-actions">
@@ -423,6 +482,10 @@ function HudMetric({ label, value, isSmall = false }) {
 
 function formatDebugValue(value) {
   return Number.isFinite(value) ? value.toFixed(2) : 'n/a'
+}
+
+function formatDebugBoolean(value) {
+  return value ? 'Yes' : 'No'
 }
 
 function createFrameMetrics() {
@@ -465,10 +528,24 @@ function recordFrameStatus(metrics, status) {
   }
 }
 
-function mergeSessionMetrics(frameMetrics, repMetrics = {}) {
+function mergeSessionMetrics(frameMetrics, repMetrics = {}, durationMs = 0) {
+  const repDurationsMs = repMetrics.repDurationsMs ?? []
+  const holdDurationsMs = repMetrics.holdDurationsMs ?? []
+  const totalFrames = frameMetrics.totalFrames ?? 0
+
   return {
     ...frameMetrics,
     ...repMetrics,
+    successfulReps: repMetrics.validReps ?? 0,
+    failedReps: repMetrics.invalidReps ?? 0,
+    durationSeconds: Math.max(0, Math.round(durationMs / 1000)),
+    medianHoldMs: median(holdDurationsMs),
+    medianRepCycleMs: median(repDurationsMs),
+    repCycleCv: coefficientOfVariation(repDurationsMs),
+    trackingQualityMean:
+      totalFrames > 0 ? (frameMetrics.goodTrackingFrames ?? 0) / totalFrames : null,
+    trackingWarningRate:
+      totalFrames > 0 ? (frameMetrics.badTrackingFrames ?? 0) / totalFrames : null,
     jitterScoresByRep: [
       ...(repMetrics.jitterScoresByRep ?? []),
       ...frameMetrics.jitterScoresByRep.filter(Number.isFinite),
@@ -484,6 +561,34 @@ function average(values) {
   }
 
   return validValues.reduce((sum, value) => sum + value, 0) / validValues.length
+}
+
+function median(values) {
+  const validValues = values.filter(Number.isFinite).sort((a, b) => a - b)
+
+  if (!validValues.length) {
+    return null
+  }
+
+  const midpoint = Math.floor(validValues.length / 2)
+  return validValues.length % 2
+    ? validValues[midpoint]
+    : (validValues[midpoint - 1] + validValues[midpoint]) / 2
+}
+
+function coefficientOfVariation(values) {
+  const validValues = values.filter((value) => Number.isFinite(value) && value > 0)
+
+  if (validValues.length < 2) {
+    return null
+  }
+
+  const mean = average(validValues)
+  const variance =
+    validValues.reduce((sum, value) => sum + (value - mean) ** 2, 0) /
+    validValues.length
+
+  return Math.sqrt(variance) / mean
 }
 
 function stopStream(stream) {

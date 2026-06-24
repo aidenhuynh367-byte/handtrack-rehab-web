@@ -18,6 +18,9 @@ export function createCycleRepCounter({
   isActive,
   isReleased,
   getRangeScore,
+  getDebugState,
+  earlyReleaseInstruction = activeInstruction,
+  countEarlyReleaseAsInvalid = true,
 }) {
   const state = {
     phase: initialPhase,
@@ -34,6 +37,8 @@ export function createCycleRepCounter({
     justCounted: false,
     setComplete: false,
     complete: false,
+    debug: null,
+    retryAfterEarlyRelease: false,
     metrics: {
       attemptedReps: 0,
       validReps: 0,
@@ -61,6 +66,7 @@ export function createCycleRepCounter({
     state.instruction = activeInstruction
     state.measurement = null
     state.justCounted = false
+    state.retryAfterEarlyRelease = false
   }
 
   const recordTransition = () => {
@@ -131,6 +137,7 @@ export function createCycleRepCounter({
 
       const measurement = getMeasurement(landmarks)
       state.measurement = measurement
+      state.debug = getDebugState?.(landmarks, measurement) ?? null
 
       if (!Number.isFinite(measurement)) {
         recordInvalidRep()
@@ -142,7 +149,9 @@ export function createCycleRepCounter({
       updateMinimumMeasurement(measurement)
 
       if (state.phase === initialPhase) {
-        if (isActive(measurement)) {
+        if (isActive(measurement, landmarks)) {
+          state.retryAfterEarlyRelease = false
+
           if (state.targetFrames === 0) {
             state.repStartedAt = timestamp
             state.minMeasurementInRep = measurement
@@ -164,12 +173,20 @@ export function createCycleRepCounter({
           state.targetFrames = 0
           state.repStartedAt = null
           state.minMeasurementInRep = null
-          state.instruction = activeInstruction
+          state.instruction = state.retryAfterEarlyRelease
+            ? earlyReleaseInstruction
+            : activeInstruction
         }
       } else if (state.phase === activePhase) {
-        if (isReleased(measurement)) {
-          recordInvalidRep()
+        if (isReleased(measurement, landmarks)) {
+          // early release means they moved too fast, not always a failed rep
+          if (countEarlyReleaseAsInvalid) {
+            recordInvalidRep()
+          }
+
           resetGesture()
+          state.retryAfterEarlyRelease = true
+          state.instruction = earlyReleaseInstruction
         } else if (timestamp - state.holdStartedAt >= holdTimeMs) {
           state.phase = holdPhase
           recordTransition()
@@ -178,7 +195,7 @@ export function createCycleRepCounter({
           state.instruction = holdInstruction
         }
       } else if (state.phase === holdPhase) {
-        if (isReleased(measurement)) {
+        if (isReleased(measurement, landmarks)) {
           countRep(timestamp)
         } else {
           state.instruction = releaseInstruction
@@ -201,6 +218,7 @@ export function createCycleRepCounter({
       state.justCounted = false
       state.setComplete = false
       state.complete = false
+      state.retryAfterEarlyRelease = false
 
       if (!keepProgress) {
         state.repsInSet = 0

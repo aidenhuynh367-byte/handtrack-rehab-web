@@ -1,27 +1,6 @@
-import { useEffect, useState } from 'react'
 import ImageWithFallback from './ImageWithFallback.jsx'
 
-const DEMO_SECONDS = 7
-
 function DemoScreen({ exercise, selectedHand, targetReps, targetSets, onBack, onComplete }) {
-  const [secondsLeft, setSecondsLeft] = useState(DEMO_SECONDS)
-
-  useEffect(() => {
-    const startedAt = Date.now()
-    const intervalId = window.setInterval(() => {
-      const elapsedSeconds = Math.floor((Date.now() - startedAt) / 1000)
-      const nextSeconds = Math.max(0, DEMO_SECONDS - elapsedSeconds)
-      setSecondsLeft(nextSeconds)
-
-      if (nextSeconds === 0) {
-        window.clearInterval(intervalId)
-        onComplete()
-      }
-    }, 200)
-
-    return () => window.clearInterval(intervalId)
-  }, [onComplete])
-
   return (
     <section className="screen demo-screen">
       <div className="demo-heading">
@@ -29,15 +8,17 @@ function DemoScreen({ exercise, selectedHand, targetReps, targetSets, onBack, on
           <p className="section-kicker">Demonstration</p>
           <h2>{exercise.name}</h2>
         </div>
-        <div className="countdown" aria-label={`${secondsLeft} seconds until tracking starts`}>
-          {secondsLeft}
-        </div>
       </div>
 
       <div className="demo-plan">
         <span>{selectedHand} hand</span>
         <span>{targetReps} reps</span>
         <span>{targetSets} sets</span>
+      </div>
+
+      <div className="demo-readiness">
+        <p>Review the movement instructions before starting.</p>
+        <p>Click Next when you are ready to begin.</p>
       </div>
 
       <div className="demo-images">
@@ -72,7 +53,7 @@ function DemoScreen({ exercise, selectedHand, targetReps, targetSets, onBack, on
           Back
         </button>
         <button className="primary-button" type="button" onClick={onComplete}>
-          Start Tracking
+          Next
         </button>
       </div>
     </section>
