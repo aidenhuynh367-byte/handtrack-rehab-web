@@ -48,6 +48,7 @@ function HandSetupCheckScreen({ selectedHand, onBack, onComplete }) {
   const [trackingStatus, setTrackingStatus] = useState('Hand not detected')
   const [isCalibrating, setIsCalibrating] = useState(false)
   const [failed, setFailed] = useState(false)
+  const [cameraAspectRatio, setCameraAspectRatio] = useState('4 / 3')
 
   useEffect(() => {
     let isActive = true
@@ -243,6 +244,13 @@ function HandSetupCheckScreen({ selectedHand, onBack, onComplete }) {
       ? `Calibrating: ${secondsLeft}`
       : 'Place your hand inside the box',
   })
+  const updateCameraAspectRatio = () => {
+    const video = videoRef.current
+
+    if (video?.videoWidth && video?.videoHeight) {
+      setCameraAspectRatio(`${video.videoWidth} / ${video.videoHeight}`)
+    }
+  }
 
   return (
     <section className="screen setup-check-screen">
@@ -271,8 +279,19 @@ function HandSetupCheckScreen({ selectedHand, onBack, onComplete }) {
 
       <div className="setup-check-layout">
         <div className={`camera-panel ${failed ? 'calibration-failed' : ''}`}>
-          <div className={`camera-stage camera-frame ${setupHasWarning ? 'orientation-warning' : ''}`}>
-            <video ref={videoRef} className="camera-video" playsInline muted />
+          <div
+            className={`camera-stage camera-frame ${setupHasWarning ? 'orientation-warning' : ''}`}
+            style={{ '--camera-aspect-ratio': cameraAspectRatio }}
+          >
+            {/* keeps video and landmarks aligned */}
+            <video
+              ref={videoRef}
+              className="camera-video"
+              playsInline
+              muted
+              onLoadedMetadata={updateCameraAspectRatio}
+              onResize={updateCameraAspectRatio}
+            />
             <canvas ref={canvasRef} className="landmark-canvas" />
             <div className="guide-box" aria-hidden="true" />
             {setupHasWarning && (

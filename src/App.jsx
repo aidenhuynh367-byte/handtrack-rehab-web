@@ -4,6 +4,7 @@ import CameraTrackingScreen from './components/CameraTrackingScreen.jsx'
 import CurrentSessionResult from './components/CurrentSessionResult.jsx'
 import DemoScreen from './components/DemoScreen.jsx'
 import HandSetupCheckScreen from './components/HandSetupCheckScreen.jsx'
+import PrivacyNoticeScreen from './components/PrivacyNoticeScreen.jsx'
 import ProfileSetupScreen from './components/ProfileSetupScreen.jsx'
 import ReportsDashboard from './components/ReportsDashboard.jsx'
 import { saveSessionReport } from './firebase/sessionReports.js'
@@ -24,12 +25,15 @@ function App() {
   const [calibration, setCalibration] = useState(null)
   const [sessionAccess, setSessionAccess] = useState(null)
   const [userProfile, setUserProfile] = useState(null)
+  const [privacyNoticeAccepted, setPrivacyNoticeAccepted] = useState(false)
+  const [postPrivacyScreen, setPostPrivacyScreen] = useState('exercise')
   const [profileMode, setProfileMode] = useState('initial')
   const [profileReturnScreen, setProfileReturnScreen] = useState('exercise')
   const [reportSaveError, setReportSaveError] = useState('')
   const [currentSessionResult, setCurrentSessionResult] = useState(null)
   const exercise = getExerciseById(plan.exerciseId)
   const isSignedIn = sessionAccess?.mode === 'google' && sessionAccess.user
+  const canUseSessionFlow = privacyNoticeAccepted
 
   const completeSession = async (sessionSummary) => {
     const completedSummary = {
@@ -98,6 +102,18 @@ function App() {
     setScreen('profile')
   }
 
+  const showPrivacyNoticeBefore = (nextScreen) => {
+    // keeps the notice before collecting session results
+    setPrivacyNoticeAccepted(false)
+    setPostPrivacyScreen(nextScreen)
+    setScreen('privacy')
+  }
+
+  const continueAfterPrivacyNotice = () => {
+    setPrivacyNoticeAccepted(true)
+    setScreen(postPrivacyScreen)
+  }
+
   const completeSetupCheck = (setupCalibration) => {
     setCalibration({
       ...setupCalibration,
@@ -120,7 +136,7 @@ function App() {
         </div>
         <div className="header-meta">
           {isSignedIn &&
-            !['welcome', 'auth', 'profile', 'reports', 'saving-report'].includes(screen) && (
+            !['welcome', 'auth', 'privacy', 'profile', 'reports', 'saving-report'].includes(screen) && (
             <button
               className="header-profile-button"
               type="button"
@@ -129,7 +145,6 @@ function App() {
               Edit Profile
             </button>
           )}
-          <span className="status-pill">Prototype</span>
           <span className="maker-credit">Made by Aiden H</span>
         </div>
       </div>
@@ -145,22 +160,26 @@ function App() {
             setUserProfile(profile)
 
             if (profile.profileSetupSeen) {
-              setScreen('exercise')
+              showPrivacyNoticeBefore('exercise')
             } else {
               setProfileMode('initial')
               setProfileReturnScreen('exercise')
-              setScreen('profile')
+              showPrivacyNoticeBefore('profile')
             }
           }}
           onGuestContinue={() => {
             setSessionAccess({ mode: 'guest', user: null })
             setUserProfile(null)
-            setScreen('exercise')
+            showPrivacyNoticeBefore('exercise')
           }}
         />
       )}
 
-      {screen === 'profile' && isSignedIn && (
+      {screen === 'privacy' && (
+        <PrivacyNoticeScreen onContinue={continueAfterPrivacyNotice} />
+      )}
+
+      {screen === 'profile' && isSignedIn && canUseSessionFlow && (
         <ProfileSetupScreen
           user={sessionAccess.user}
           profile={userProfile}
@@ -173,7 +192,7 @@ function App() {
         />
       )}
 
-      {screen === 'exercise' && (
+      {screen === 'exercise' && canUseSessionFlow && (
         <ExerciseChoiceScreen
           exerciseId={plan.exerciseId}
           onSelect={(exerciseId) => {
@@ -185,7 +204,7 @@ function App() {
         />
       )}
 
-      {screen === 'hand' && (
+      {screen === 'hand' && canUseSessionFlow && (
         <HandChoiceScreen
           selectedHand={plan.selectedHand}
           onSelect={(selectedHand) => {
@@ -197,7 +216,7 @@ function App() {
         />
       )}
 
-      {screen === 'dose' && (
+      {screen === 'dose' && canUseSessionFlow && (
         <DoseScreen
           targetReps={plan.targetReps}
           targetSets={plan.targetSets}
@@ -207,7 +226,7 @@ function App() {
         />
       )}
 
-      {screen === 'setup-check' && (
+      {screen === 'setup-check' && canUseSessionFlow && (
         <HandSetupCheckScreen
           selectedHand={plan.selectedHand}
           onBack={() => setScreen('dose')}
@@ -215,7 +234,7 @@ function App() {
         />
       )}
 
-      {screen === 'demo' && (
+      {screen === 'demo' && canUseSessionFlow && (
         <DemoScreen
           exercise={exercise}
           selectedHand={plan.selectedHand}
@@ -226,7 +245,7 @@ function App() {
         />
       )}
 
-      {screen === 'tracking' && (
+      {screen === 'tracking' && canUseSessionFlow && (
         <CameraTrackingScreen
           exercise={exercise}
           selectedHand={plan.selectedHand}
@@ -263,28 +282,104 @@ function App() {
 function WelcomeScreen({ onStart }) {
   return (
     <section className="screen intro-screen">
-      <div className="intro-copy">
-        <p className="section-kicker">Guided hand exercise</p>
-        <h2>Practice controlled hand movements with live tracking.</h2>
+      {/* visual-only hero section */}
+      <div className="welcome-hero">
+        <div className="welcome-copy">
+          {/* explains the app before login */}
+          <p className="section-kicker">GUIDED HAND EXERCISE</p>
+          <h2>Do your rehab at home</h2>
+          <p>
+            HandTrack Rehab uses your webcam to guide hand exercises, track movement
+            quality, and save progress over time.
+          </p>
+          <button className="primary-button wide-button" type="button" onClick={onStart}>
+            Start session
+          </button>
+        </div>
+
+        <div className="welcome-visual" aria-hidden="true">
+          {/* decorative shapes stay behind content */}
+          <span className="hero-orb hero-orb-one" />
+          <span className="hero-orb hero-orb-two" />
+          <span className="hero-orb hero-orb-three" />
+          <svg className="hero-orbit hero-orbit-one" viewBox="0 0 320 210">
+            <path d="M21 144C70 31 240 12 300 94C363 180 116 229 44 177" />
+          </svg>
+          <svg className="hero-orbit hero-orbit-two" viewBox="0 0 300 220">
+            <path d="M25 122C53 61 132 20 205 48C263 70 285 133 245 171C200 214 97 202 49 157" />
+          </svg>
+
+          <div className="hero-device-card">
+            <div className="hero-device-topline">
+              <span />
+              <span />
+              <span />
+            </div>
+            <div className="hero-image-frame" />
+          </div>
+        </div>
+      </div>
+
+      <section className="welcome-section">
+        <div className="welcome-section-heading">
+          <p className="section-kicker">How it works</p>
+          <h3>How HandTrack Rehab works</h3>
+        </div>
+        <div className="welcome-card-grid four-card-grid">
+          <WelcomeInfoCard title="Choose an exercise" text="Select the hand movement you want to practice." />
+          <WelcomeInfoCard title="Calibrate your hand" text="Set a starting baseline so scoring fits your session." />
+          <WelcomeInfoCard title="Follow the guided movement" text="Use webcam-based hand landmark tracking for real-time cues." />
+          <WelcomeInfoCard title="Review your session score" text="See calibrated movement scores after the session ends." />
+        </div>
+      </section>
+
+      <section className="welcome-section">
+        <div className="welcome-section-heading">
+          <p className="section-kicker">Movement scoring</p>
+          <h3>What the movement score measures</h3>
+        </div>
+        <div className="welcome-card-grid four-card-grid">
+          <WelcomeInfoCard
+            title="Range control"
+            text="How completely the movement reaches the target position."
+          />
+          <WelcomeInfoCard
+            title="Movement control"
+            text="How smoothly and steadily the hand moves."
+          />
+          <WelcomeInfoCard
+            title="Rep consistency"
+            text="How similar each repetition is across the session."
+          />
+          <WelcomeInfoCard
+            title="Tracking quality"
+            text="Whether the camera view is reliable enough to score."
+          />
+        </div>
+      </section>
+
+      <section className="welcome-section privacy-practice-card">
+        <div>
+          <p className="section-kicker">Private practice</p>
+          <h3>Built for private practice</h3>
+        </div>
+        {/* safer wording, not clinical validation */}
         <p>
-          This prototype uses browser hand tracking to count clean repetitions
-          only after the target position, brief hold, and release.
+          The app does not save webcam video, photos, or raw movement recordings by
+          default. Signed-in users can save numerical session results to track progress
+          over time.
         </p>
-      </div>
-      <div className="exercise-card">
-        <div>
-          <span className="metric-label">Exercises</span>
-          <strong>3 guided movements</strong>
-        </div>
-        <div>
-          <span className="metric-label">Tracking</span>
-          <strong>MediaPipe HandLandmarker</strong>
-        </div>
-      </div>
-      <button className="primary-button wide-button" type="button" onClick={onStart}>
-        Start Session
-      </button>
+      </section>
     </section>
+  )
+}
+
+function WelcomeInfoCard({ title, text }) {
+  return (
+    <article className="welcome-info-card">
+      <h4>{title}</h4>
+      <p>{text}</p>
+    </article>
   )
 }
 

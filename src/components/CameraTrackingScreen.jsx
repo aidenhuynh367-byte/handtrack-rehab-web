@@ -59,6 +59,7 @@ function CameraTrackingScreen({
     phase: counter.phase,
     instruction: counter.instruction,
   }))
+  const [cameraAspectRatio, setCameraAspectRatio] = useState('4 / 3')
   const [cameraError, setCameraError] = useState('')
   const [counterState, setCounterState] = useState(() => counter.getState())
 
@@ -364,13 +365,31 @@ function CameraTrackingScreen({
     counterInstruction: counterState.instruction,
     fallbackInstruction: hud.trackingStatus,
   })
+  const updateCameraAspectRatio = () => {
+    const video = videoRef.current
+
+    if (video?.videoWidth && video?.videoHeight) {
+      setCameraAspectRatio(`${video.videoWidth} / ${video.videoHeight}`)
+    }
+  }
 
   return (
     <section className="tracking-screen">
       <div className="camera-layout">
         <div className="camera-panel">
-          <div className={`camera-stage camera-frame ${hasOrientationWarning ? 'orientation-warning' : ''}`}>
-            <video ref={videoRef} className="camera-video" playsInline muted />
+          <div
+            className={`camera-stage camera-frame ${hasOrientationWarning ? 'orientation-warning' : ''}`}
+            style={{ '--camera-aspect-ratio': cameraAspectRatio }}
+          >
+            {/* keeps video and landmarks aligned */}
+            <video
+              ref={videoRef}
+              className="camera-video"
+              playsInline
+              muted
+              onLoadedMetadata={updateCameraAspectRatio}
+              onResize={updateCameraAspectRatio}
+            />
             <canvas ref={canvasRef} className="landmark-canvas" />
             <div className="guide-box" aria-hidden="true" />
             {hasOrientationWarning && (
